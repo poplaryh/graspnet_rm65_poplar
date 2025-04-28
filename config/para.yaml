@@ -1,0 +1,51 @@
+robot_ip: '192.168.110.118'
+
+CHECKPOINT_PATH: '/home/arm_hao/bottleo/graspnet-baseline/logs/log_rs/checkpoint-rs.tar'  # 修改为你的权重路径
+NUM_POINT: 20000
+NUM_VIEW: 300
+COLLISION_THRESH: 0.01
+VOXEL_SIZE: 0.01
+
+cam_resolution:
+  height: 480
+  width: 640
+
+# cam_resolution:
+#   height: 720
+#   width: 1280
+
+# 工作空间掩码固定路径（与权重文件类似，写死在脚本中）
+WORKSPACE_MASK_PATH: '/home/arm_hao/bottleo/graspnet-baseline/doc/example_data/workspace_mask.png'
+
+# 相机内参（使用深度相机参数生成点云，根据实际相机修改）, 1280*720
+# DEPTH_INTR:
+#   ppx: 637.515
+#   ppy: 358.546
+#   fx: 637.481
+#   fy: 637.481
+
+# CAM_INTR:
+#   ppx: 652.811 
+#   ppy: 356.065
+#   fx: 913.225
+#   fy: 911.32
+
+# 640*480
+DEPTH_INTR:
+  ppx: 318.509
+  ppy: 239.128
+  fx: 382.489
+  fy: 382.489
+
+CAM_INTR:
+  ppx: 328.541
+  ppy: 237.377
+  fx: 608.816
+  fy: 607.547
+
+DEPTH_FACTOR: 1000.0  # 深度因子，根据实际数据调整
+
+translation_vector: [-0.09674632,0.03282877,0.0294021 ]
+rotation_matrix: [[-0.00310044 , 0.99999236 , 0.00238261],
+                  [-0.99997374 ,-0.00311597  ,0.00654238],
+                  [ 0.00654975 ,-0.00236226 , 0.99997576]]
