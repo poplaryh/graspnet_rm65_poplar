@@ -86,10 +86,10 @@ def get_and_process_data(color_path, depth_path, mask_path):
 
     # 3. 加载工作空间掩码（可能是路径，也可能是数组）
     if isinstance(mask_path, str):
-        # workspace_mask = np.array(Image.open(mask_path))
-        workspace_mask = Image.open(mask_path)
-        workspace_mask = workspace_mask.resize((640, 480), Image.Resampling.LANCZOS)
-        workspace_mask = np.array(workspace_mask)
+        workspace_mask = np.array(Image.open(mask_path))
+        # workspace_mask = Image.open(mask_path)
+        # workspace_mask = workspace_mask.resize((640, 480), Image.Resampling.LANCZOS)
+        # workspace_mask = np.array(workspace_mask)
     elif isinstance(mask_path, np.ndarray):
         workspace_mask = mask_path
     else:
@@ -206,26 +206,26 @@ def run_grasp_inference(color_path, depth_path, sam_mask_path=None):
     # ===== 新增筛选部分：对抓取预测的接近方向进行垂直角度限制 =====
     # 将 gg 转换为普通列表
     all_grasps = list(gg)
-    # filtered = all_grasps
+    filtered = all_grasps
 
 
-    vertical = np.array([0, 0, 1])  # 期望抓取接近方向（垂直桌面）
-    angle_threshold = np.deg2rad(30)  # 30度的弧度值
-    filtered = []
-    for grasp in all_grasps:
-        # 抓取的接近方向取 grasp.rotation_matrix 的第一列
-        approach_dir = grasp.rotation_matrix[:, 0]
-        # 计算夹角：cos(angle)=dot(approach_dir, vertical)
-        cos_angle = np.dot(approach_dir, vertical)
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        angle = np.arccos(cos_angle)
-        if angle < angle_threshold:
-            filtered.append(grasp)
-    if len(filtered) == 0:
-        print("\n[Warning] No grasp predictions within vertical angle threshold. Using all predictions.")
-        filtered = all_grasps
-    else:
-        print(f"\n[DEBUG] Filtered {len(filtered)} grasps within ±30° of vertical out of {len(all_grasps)} total predictions.")
+    # vertical = np.array([0, 0, 1])  # 期望抓取接近方向（垂直桌面）
+    # angle_threshold = np.deg2rad(30)  # 30度的弧度值
+    # filtered = []
+    # for grasp in all_grasps:
+    #     # 抓取的接近方向取 grasp.rotation_matrix 的第一列
+    #     approach_dir = grasp.rotation_matrix[:, 0]
+    #     # 计算夹角：cos(angle)=dot(approach_dir, vertical)
+    #     cos_angle = np.dot(approach_dir, vertical)
+    #     cos_angle = np.clip(cos_angle, -1.0, 1.0)
+    #     angle = np.arccos(cos_angle)
+    #     if angle < angle_threshold:
+    #         filtered.append(grasp)
+    # if len(filtered) == 0:
+    #     print("\n[Warning] No grasp predictions within vertical angle threshold. Using all predictions.")
+    #     filtered = all_grasps
+    # else:
+    #     print(f"\n[DEBUG] Filtered {len(filtered)} grasps within ±30° of vertical out of {len(all_grasps)} total predictions.")
 
 
 
@@ -279,12 +279,13 @@ def run_grasp_inference(color_path, depth_path, sam_mask_path=None):
 
     # 选择得分最高的抓取（filtered 列表已按得分降序排序）
     
-    best_grasp = top_grasps[0]
-    best_translation = best_grasp.translation
-    best_rotation = best_grasp.rotation_matrix
-    best_width = best_grasp.width
+    # best_grasp = top_grasps[0]
+    # best_translation = best_grasp.translation
+    # best_rotation = best_grasp.rotation_matrix
+    # best_width = best_grasp.width
 
-    return best_translation, best_rotation, best_width
+    # return best_translation, best_rotation, best_width
+    return top_grasps, cloud_o3d
 
 # ==================== 如果希望直接在此脚本中测试，可保留 main ====================
 if __name__ == '__main__':

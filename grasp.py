@@ -12,6 +12,7 @@ from vertical_grab.convert_update import convert_new
 from cv_process import segment_image
 from grasp_process import run_grasp_inference
 import time
+import open3d as o3d
 from config.loader import load_config
 
 # 加载配置参数
@@ -101,14 +102,6 @@ def numpy_to_Matrix(x):
     out.data[:] = x.flatten()
     return out
 
-def check_camera_pose(current_joint, target_pose):
-    global robot
-    # 逆解从关节角度current)joint到目标位姿target_pose。目标位姿姿态使用欧拉角表示。
-    params = rm_inverse_kinematics_params_t(current_joint, target_pose, 1)
-    _, _, _, _, _, j6 = robot.rm_algo_inverse_kinematics(params)
-    return
-
-
 def test_grasp():
     global color_img, depth_img, robot, first_run, init
 
@@ -119,119 +112,218 @@ def test_grasp():
     # 图像处理部分
     masks = segment_image(color_img)  
     
-    translation, rotation_mat_3x3, width = run_grasp_inference(
+    # translation, rotation_mat_3x3, width = run_grasp_inference(
+    #     color_img,
+    #     depth_img,
+    #     masks
+    # )
+    predict_result, cloud_o3d = run_grasp_inference(
         color_img,
         depth_img,
         masks
     )
+    for i, result in enumerate(predict_result):
+        print(f"[DEBUG] 预测结果 {i} ")
+        translation, rotation_mat_3x3, width = result.translation, result.rotation_matrix, result.width
+        # print(f"[DEBUG] 预测结果 {i+1} - 平移: {translation}, 旋转矩阵:\n{rotation_mat_3x3}")
+        error_code, dic_state = robot.rm_get_current_arm_state()
+        if not error_code:
+            joints = dic_state['joint']
+            current_pose = dic_state['pose']
+            # print("\n[DEBUG]当前关节角度:", joints)
+            # print("\n[DEBUG]未补偿夹爪前位姿:", current_pose_old)
+        else:
+            print('返回机械臂当前状态失败，检查机械臂连接状况')
+            return 
 
-    print(f"[DEBUG] Grasp预测结果 - 平移: {translation}, 旋转矩阵:\n{rotation_mat_3x3}")
+        # print("[DEBUG] 补偿夹爪后的位姿:", current_pose)
+        T1 = robot.rm_algo_pos2matrix(current_pose)  # 位姿转换为齐次矩阵
+        T_ee2base = matrix_to_list(T1)
+        # print("[DEBUG] 官方api计算出对应的齐次矩阵:", T_ee2base)
 
-    error_code, dic_state = robot.rm_get_current_arm_state()
-    if not error_code:
-        joints = dic_state['joint']
-        current_pose_old = dic_state['pose']
-        print("\n[DEBUG]当前关节角度:", joints)
-        print("\n[DEBUG]未补偿夹爪前位姿:", current_pose_old)
-    else:
-        print('返回机械臂当前状态失败，检查机械臂连接状况')
-        return 
+        T_grasp2base = convert_new(
+            translation,
+            rotation_mat_3x3,
+            rotation_matrix,
+            translation_vector,
+            T_ee2base
+        )
+        # print("[DEBUG] 基坐标系抓取齐次矩阵:", T_grasp2base)
 
+        # 判断相机朝向下还是上，防止相机碰到桌面
+        T_cam2end = np.eye(4)
+        # print('shape of calibration rotaion matrix ', '\n', np.shape(rotation_matrix), type(rotation_matrix))
+        # print('shape of calibration translation matrix ', '\n', np.shape(translation_vector), type(translation_vector))
+        T_cam2end[:3, :3] = rotation_matrix
+        T_cam2end[:3, 3] = translation_vector
+        T_cam_pose = T_grasp2base @ T_cam2end
+        diff_cam_end = T_cam_pose[2, -1] - T_grasp2base[2, -1]
+        matrix_struct = numpy_to_Matrix(T_grasp2base)
+        base_pose = robot.rm_algo_matrix2pos(matrix_struct)
+        # mode_input = None
 
-    # 补偿夹爪长度
-    current_pose = robot.rm_algo_cartesian_tool(joints, 0, 0, -0.05)
-    print("[DEBUG] 补偿夹爪后的位姿:", current_pose)
-    T1 = robot.rm_algo_pos2matrix(current_pose)  # 位姿转换为齐次矩阵
-    T_ee2base = matrix_to_list(T1)
-    # print("[DEBUG] 官方api计算出对应的齐次矩阵:", T_ee2base)
-
-    T_grasp2base = convert_new(
-        translation,
-        rotation_mat_3x3,
-        rotation_matrix,
-        translation_vector,
-        T_ee2base
-    )
-    print("[DEBUG] 基坐标系抓取齐次矩阵:", T_grasp2base)
-
-    # 判断相机朝向下还是上，防止相机碰到桌面
-    T_cam2end = np.eye(4)
-    print('shape of calibration rotaion matrix ', '\n', np.shape(rotation_matrix), type(rotation_matrix))
-    print('shape of calibration translation matrix ', '\n', np.shape(translation_vector), type(translation_vector))
-    T_cam2end[:3, :3] = rotation_matrix
-    T_cam2end[:3, 3] = translation_vector
-    T_cam_pose = T_grasp2base @ T_cam2end
-    diff_cam_end = T_cam_pose[2, -1] - T_grasp2base[2, -1]
-    matrix_struct = numpy_to_Matrix(T_grasp2base)
-    base_pose = robot.rm_algo_matrix2pos(matrix_struct)
-    mode_input = None
-    if diff_cam_end < 0:
-        print('相机朝下，可能会怼到桌面，需要调整一下')
         para = rm_inverse_kinematics_params_t(joints, base_pose, 1)
         error_code, joint_new = robot.rm_algo_inverse_kinematics(para)
         if error_code == 0:
             print('逆解成功')
-            joint_new[-1] += 180
-            mode_input = 'joint'
+            if diff_cam_end < 0:
+                print('相机朝下，可能会怼到桌面，需要调整一下')
+                joint_new[-1] += 180
+                if joint_new[-1] >= 360:
+                    joint_new[-1] -= 360
+                elif joint_new[-1] <= -360:
+                    joint_new[-1] += 360
+                # mode_input = 'joint'
+                # base_pose_new = robot.rm_algo_forward_kinematics(joint_new, 1)
+            else:
+                print('目标位姿相机朝上，暂无碰到桌面的危险')
+                # mode_input = 'pose'
         else:
             print('逆解失败，失败码为： ', error_code)
-    else:
-        print('目标位姿相机朝上，暂无碰到桌面的危险')
-        mode_input = 'pose'
+            continue
+        
 
-    print("[DEBUG] 最终抓取位姿是什么:", base_pose)
+        # 补偿夹爪长度
+        base_pose_new = robot.rm_algo_cartesian_tool(joint_new, 0, 0, -0.10)
 
-    # 首次运行只计算不执行
-    if first_run:
-        print("[INFO] 首次运行模拟完成，准备正式执行")
-        first_run = False
-        return  # 直接返回不执行后续动作
+        # 首次运行只计算不执行
+        if first_run:
+            print("[INFO] 首次运行模拟完成，准备正式执行")
+            first_run = False
+            return  # 直接返回不执行后续动作
 
-    # 正式执行部分
-    # base_pose_np = np.array(base_pose, dtype=float)
-    # base_xyz = base_pose_np[:3]
-    # base_rxyz = base_pose_np[3:]
+        try:
+            print(f"实际抓取: {base_pose_new}")
+            grippers = [g.to_open3d_geometry() for g in [result]]
+            o3d.visualization.draw_geometries([cloud_o3d, *grippers])
+            input()
+            ret = robot.rm_movej_p(base_pose_new, 10, 0, 0, 1)
+            if ret != 0: raise RuntimeError(f"抓取失败，错误码: {ret}")
 
-    # # 预抓取计算
-    # pre_grasp_offset = 0.1
-    # pre_grasp_pose = np.array(base_pose, dtype=float).copy()
-    # # rotation_mat = R.from_euler('xyz', pre_grasp_pose[3:]).as_matrix()
+            print("闭合夹爪")
+            # ret = robot.Set_Gripper_Pick(200, 300)
+            # if ret != 0: raise RuntimeError(f"夹爪闭合失败，错误码: {ret}")
+
+            # robot.Movej_Cmd(init, 10, 0)
+            # #robot.Movej_Cmd(fang, 10, 0)
+            # robot.Set_Gripper_Release(200)
+            time.sleep(5)
+            robot.rm_movej_p(init, 20, 0, 0, 1)
+        except Exception as e:
+            print(f"[ERROR] 运动异常: {str(e)}")
+            robot.rm_movej_p(init, 20, 0, 0, 1)
+        
+        if ret == 0:
+            print(f"[INFO] 运动成功")
+            break
+
+    # print(f"[DEBUG] Grasp预测结果 - 平移: {translation}, 旋转矩阵:\n{rotation_mat_3x3}")
+
+    # error_code, dic_state = robot.rm_get_current_arm_state()
+    # if not error_code:
+    #     joints = dic_state['joint']
+    #     current_pose_old = dic_state['pose']
+    #     print("\n[DEBUG]当前关节角度:", joints)
+    #     print("\n[DEBUG]未补偿夹爪前位姿:", current_pose_old)
+    # else:
+    #     print('返回机械臂当前状态失败，检查机械臂连接状况')
+    #     return 
+
+
+    # # 补偿夹爪长度
+    # current_pose = robot.rm_algo_cartesian_tool(joints, 0, 0, -0.05)
+    # print("[DEBUG] 补偿夹爪后的位姿:", current_pose)
+    # T1 = robot.rm_algo_pos2matrix(current_pose)  # 位姿转换为齐次矩阵
+    # T_ee2base = matrix_to_list(T1)
+    # # print("[DEBUG] 官方api计算出对应的齐次矩阵:", T_ee2base)
+
+    # T_grasp2base = convert_new(
+    #     translation,
+    #     rotation_mat_3x3,
+    #     rotation_matrix,
+    #     translation_vector,
+    #     T_ee2base
+    # )
+    # print("[DEBUG] 基坐标系抓取齐次矩阵:", T_grasp2base)
+
+    # # 判断相机朝向下还是上，防止相机碰到桌面
+    # T_cam2end = np.eye(4)
+    # print('shape of calibration rotaion matrix ', '\n', np.shape(rotation_matrix), type(rotation_matrix))
+    # print('shape of calibration translation matrix ', '\n', np.shape(translation_vector), type(translation_vector))
+    # T_cam2end[:3, :3] = rotation_matrix
+    # T_cam2end[:3, 3] = translation_vector
+    # T_cam_pose = T_grasp2base @ T_cam2end
+    # diff_cam_end = T_cam_pose[2, -1] - T_grasp2base[2, -1]
+    # matrix_struct = numpy_to_Matrix(T_grasp2base)
+    # base_pose = robot.rm_algo_matrix2pos(matrix_struct)
+    # mode_input = None
+    # if diff_cam_end < 0:
+    #     print('相机朝下，可能会怼到桌面，需要调整一下')
+    #     para = rm_inverse_kinematics_params_t(joints, base_pose, 1)
+    #     error_code, joint_new = robot.rm_algo_inverse_kinematics(para)
+    #     if error_code == 0:
+    #         print('逆解成功')
+    #         joint_new[-1] += 180
+    #         mode_input = 'joint'
+    #     else:
+    #         print('逆解失败，失败码为： ', error_code)
+    # else:
+    #     print('目标位姿相机朝上，暂无碰到桌面的危险')
+    #     mode_input = 'pose'
+
+    # print("[DEBUG] 最终抓取位姿是什么:", base_pose)
+
+    # # 首次运行只计算不执行
+    # if first_run:
+    #     print("[INFO] 首次运行模拟完成，准备正式执行")
+    #     first_run = False
+    #     return  # 直接返回不执行后续动作
+
+    # # 正式执行部分
+    # # base_pose_np = np.array(base_pose, dtype=float)
+    # # base_xyz = base_pose_np[:3]
+    # # base_rxyz = base_pose_np[3:]
+
+    # # # 预抓取计算
+    # # pre_grasp_offset = 0.1
+    # # pre_grasp_pose = np.array(base_pose, dtype=float).copy()
+    # # # rotation_mat = R.from_euler('xyz', pre_grasp_pose[3:]).as_matrix()
+    # # # z_axis = rotation_mat[:, 2]
+    # # # pre_grasp_pose[:3] -= z_axis * pre_grasp_offset
+
+    # # rotation_mat = np.array(T_grasp2base[:3, :3], dtype=float)
     # # z_axis = rotation_mat[:, 2]
     # # pre_grasp_pose[:3] -= z_axis * pre_grasp_offset
 
-    # rotation_mat = np.array(T_grasp2base[:3, :3], dtype=float)
-    # z_axis = rotation_mat[:, 2]
-    # pre_grasp_pose[:3] -= z_axis * pre_grasp_offset
+    # # fang = [-20, 25, 0, -90, 0, 25, 0]
 
-    # fang = [-20, 25, 0, -90, 0, 25, 0]
-
-    try:
-        # input()
-        # print(f"预抓取位姿: {pre_grasp_pose.tolist()}")
-        # ret = robot.rm_movej_p(pre_grasp_pose, 15, 0, 0, 1)
-        # if ret != 0: raise RuntimeError(f"预抓取失败，错误码: {ret}")
+    # try:
+    #     # input()
+    #     # print(f"预抓取位姿: {pre_grasp_pose.tolist()}")
+    #     # ret = robot.rm_movej_p(pre_grasp_pose, 15, 0, 0, 1)
+    #     # if ret != 0: raise RuntimeError(f"预抓取失败，错误码: {ret}")
         
 
-        print(f"实际抓取: {base_pose}")
-        input()
-        if mode_input == 'joint':
-            ret = robot.rm_movej(joint_new, 10, 0, 0, 1)
-        else:
-            ret = robot.rm_movej_p(base_pose, 15, 0, 0, 1)
-        if ret != 0: raise RuntimeError(f"抓取失败，错误码: {ret}")
+    #     print(f"实际抓取: {base_pose}")
+    #     input()
+    #     if mode_input == 'joint':
+    #         ret = robot.rm_movej(joint_new, 10, 0, 0, 1)
+    #     else:
+    #         ret = robot.rm_movej_p(base_pose, 15, 0, 0, 1)
+    #     if ret != 0: raise RuntimeError(f"抓取失败，错误码: {ret}")
 
-        print("闭合夹爪")
-        # ret = robot.Set_Gripper_Pick(200, 300)
-        # if ret != 0: raise RuntimeError(f"夹爪闭合失败，错误码: {ret}")
+    #     print("闭合夹爪")
+    #     # ret = robot.Set_Gripper_Pick(200, 300)
+    #     # if ret != 0: raise RuntimeError(f"夹爪闭合失败，错误码: {ret}")
 
-        # robot.Movej_Cmd(init, 10, 0)
-        # #robot.Movej_Cmd(fang, 10, 0)
-        # robot.Set_Gripper_Release(200)
-        time.sleep(5)
-        robot.rm_movej_p(init, 20, 0, 0, 1)
-    except Exception as e:
-        print(f"[ERROR] 运动异常: {str(e)}")
-        robot.rm_movej_p(init, 20, 0, 0, 1)
+    #     # robot.Movej_Cmd(init, 10, 0)
+    #     # #robot.Movej_Cmd(fang, 10, 0)
+    #     # robot.Set_Gripper_Release(200)
+    #     time.sleep(5)
+    #     robot.rm_movej_p(init, 20, 0, 0, 1)
+    # except Exception as e:
+    #     print(f"[ERROR] 运动异常: {str(e)}")
+    #     robot.rm_movej_p(init, 20, 0, 0, 1)
 
 
 
