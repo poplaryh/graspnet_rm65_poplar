@@ -148,5 +148,5 @@ def segment_image(image_path, output_mask='mask1.png'):
 
 
 if __name__ == '__main__':
-    seg_mask = segment_image('/home/arm_hao/bottleo/graspnet-baseline/doc/example_data/color.png')
+    seg_mask = segment_image('/home/arm_hao/bottleo/graspnet-baseline/data_image/微信图片_20250509145404.jpg')
     print("Segmentation result mask shape:", seg_mask.shape if seg_mask is not None else None)

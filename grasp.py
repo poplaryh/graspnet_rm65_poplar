@@ -123,7 +123,7 @@ def test_grasp():
         masks
     )
     for i, result in enumerate(predict_result):
-        print(f"[DEBUG] 预测结果 {i} ")
+        print(f"预测结果 {i} ")
         translation, rotation_mat_3x3, width = result.translation, result.rotation_matrix, result.width
         # print(f"[DEBUG] 预测结果 {i+1} - 平移: {translation}, 旋转矩阵:\n{rotation_mat_3x3}")
         error_code, dic_state = robot.rm_get_current_arm_state()
@@ -193,10 +193,10 @@ def test_grasp():
             return  # 直接返回不执行后续动作
 
         try:
-            print(f"实际抓取: {base_pose_new}")
-            grippers = [g.to_open3d_geometry() for g in [result]]
-            o3d.visualization.draw_geometries([cloud_o3d, *grippers])
-            input()
+            # print(f"实际抓取: {base_pose_new}")
+            # grippers = [g.to_open3d_geometry() for g in [result]]
+            # o3d.visualization.draw_geometries([cloud_o3d, *grippers])
+            # input()
             ret = robot.rm_movej_p(base_pose_new, 10, 0, 0, 1)
             if ret != 0: raise RuntimeError(f"抓取失败，错误码: {ret}")
 
